@@ -2,6 +2,7 @@
 #define PID_v1_h
 #define LIBRARY_VERSION	1.2.1
 
+
 class PID
 {
 
@@ -15,6 +16,7 @@ class PID
   #define REVERSE  1
   #define P_ON_M 0
   #define P_ON_E 1
+
 
   //commonly used functions **************************************************************************
     PID(double*, double*, double*,        // * constructor.  links the PID to the Input, Output, and 
@@ -48,10 +50,13 @@ class PID
 										  //   means the output will increase when error is positive. REVERSE
 										  //   means the opposite.  it's very unlikely that this will be needed
 										  //   once it is set in the constructor.
-    void SetSampleTime(int);              // * sets the frequency, in Milliseconds, with which 
-                                          //   the PID calculation is performed.  default is 100
-										  
-										  
+	void SetSampleTime(int);              // * sets the frequency, in Milliseconds, with which 
+										  //   the PID calculation is performed.  default is 100
+
+	void SetDFilterTime(int);             // * sets the frequency, in Milliseconds, with which 
+										  //   the D term IIR filter is performed. default is same as SetSampleTime								  
+	void SetOutFilterTime(int);           // * sets the frequency, in Milliseconds, with which 
+										  //   the PID  output IIR filter is performed. default is same as SetSampleTime								  
 										  
   //Display functions ****************************************************************
 	double GetKp();						  // These functions query the pid for interal values.
@@ -59,6 +64,9 @@ class PID
 	double GetKd();						  // where it's important to know what is actually 
 	int GetMode();						  //  inside the PID.
 	int GetDirection();					  //
+
+	bool debugPrint;
+	void toggleDebugPrint();
 
   private:
 	void Initialize();
@@ -78,9 +86,12 @@ class PID
     double *myOutput;             //   This creates a hard link between the variables and the 
     double *mySetpoint;           //   PID, freeing the user from having to constantly tell us
                                   //   what these values are.  with pointers we'll just know.
-			  
+
+	double alpha_D_IIR, alpha_OUT_IIR; //IIR alpha term for D and output filtering
+	void PrintInfo(double, double, double, double);
+
 	unsigned long lastTime;
-	double outputSum, lastInput;
+	double outputSum, lastInput, lastFilteredInput, lastFilteredOutput;
 
 	unsigned long SampleTime;
 	double outMin, outMax;

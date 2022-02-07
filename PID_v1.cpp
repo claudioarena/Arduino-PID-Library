@@ -13,6 +13,10 @@
 
 #include <PID_v1.h>
 
+#define IIR_FILTER_D 1
+#define IIR_FILTER_OUT 1
+#define DEBUG
+
 /*Constructor (...)*********************************************************
  *    The parameters specified here are those for for which we can't set up
  *    reliable defaults, so we need to have the user set them.
@@ -28,12 +32,13 @@ PID::PID(double* Input, double* Output, double* Setpoint,
     PID::SetOutputLimits(0, 255);				//default output limit corresponds to
 												//the arduino pwm limits
 
-    SampleTime = 100;							//default Controller Sample Time is 0.1 seconds
+    SampleTime = 100*1000L;					//default Controller Sample Time is 0.1 seconds
 
     PID::SetControllerDirection(ControllerDirection);
     PID::SetTunings(Kp, Ki, Kd, POn);
 
-    lastTime = millis()-SampleTime;
+    lastTime = micros()-SampleTime;
+	debugPrint = false;
 }
 
 /*Constructor (...)*********************************************************
@@ -58,18 +63,21 @@ PID::PID(double* Input, double* Output, double* Setpoint,
 bool PID::Compute()
 {
    if(!inAuto) return false;
-   unsigned long now = millis();
+   unsigned long now = micros();
    unsigned long timeChange = (now - lastTime);
-   if(timeChange>=SampleTime)
+   if (timeChange >= SampleTime)
    {
-      /*Compute all the working error variables*/
+	   /*Compute all the working error variables*/
       double input = *myInput;
-      double error = *mySetpoint - input;
-      double dInput = (input - lastInput);
+	  double error = *mySetpoint - input;	
+	  double dInput = (input - lastInput);
+	  double filteredInput = alpha_D_IIR * input + (1 - alpha_D_IIR) * lastFilteredInput;
+	  double dFilteredInput = (filteredInput - lastFilteredInput);
+
       outputSum+= (ki * error);
 
-      /*Add Proportional on Measurement, if P_ON_M is specified*/
-      if(!pOnE) outputSum-= kp * dInput;
+	  /*Add Proportional on Measurement, if P_ON_M is specified*/
+	  if (!pOnE) outputSum -= kp * dInput;
 
       if(outputSum > outMax) outputSum= outMax;
       else if(outputSum < outMin) outputSum= outMin;
@@ -80,18 +88,53 @@ bool PID::Compute()
       else output = 0;
 
       /*Compute Rest of PID Output*/
-      output += outputSum - kd * dInput;
+	  output += outputSum - kd * dFilteredInput;
 
 	    if(output > outMax) output = outMax;
       else if(output < outMin) output = outMin;
+
+		double filteredOutput = alpha_OUT_IIR * output+ (1 - alpha_OUT_IIR) * lastFilteredOutput;
+		output = filteredOutput;
 	    *myOutput = output;
+
+		if (debugPrint) PrintInfo(dInput, dFilteredInput, error, output);
 
       /*Remember some variables for next time*/
       lastInput = input;
+	  lastFilteredInput = filteredInput;
+	  lastFilteredOutput = filteredOutput;
       lastTime = now;
+
 	    return true;
    }
    else return false;
+}
+
+void PID::PrintInfo(double dInput, double dFilteredInput, double error, double output) {
+		double P = 0;
+		if (!pOnE) P = kp * dInput;
+		else P = kp * error;
+
+		double I = (ki * error);
+		double D = kd * dFilteredInput;
+
+		Serial.print(error);
+		Serial.print(",");
+		Serial.print(dInput);
+		Serial.print(",");
+
+		Serial.print(output);
+		Serial.print(",");
+		Serial.print(P);
+		Serial.print(",");
+		Serial.print(I);
+		Serial.print(",");
+		Serial.print(D);
+		Serial.print(",");
+		Serial.print(dInput);
+		Serial.print(",");
+		Serial.print(dFilteredInput);
+		Serial.println();
 }
 
 /* SetTunings(...)*************************************************************
@@ -108,7 +151,7 @@ void PID::SetTunings(double Kp, double Ki, double Kd, int POn)
 
    dispKp = Kp; dispKi = Ki; dispKd = Kd;
 
-   double SampleTimeInSec = ((double)SampleTime)/1000;
+   double SampleTimeInSec = ((double)SampleTime)/((double)1000*1000);
    kp = Kp;
    ki = Ki * SampleTimeInSec;
    kd = Kd / SampleTimeInSec;
@@ -133,14 +176,68 @@ void PID::SetTunings(double Kp, double Ki, double Kd){
  ******************************************************************************/
 void PID::SetSampleTime(int NewSampleTime)
 {
-   if (NewSampleTime > 0)
-   {
-      double ratio  = (double)NewSampleTime
-                      / (double)SampleTime;
-      ki *= ratio;
-      kd /= ratio;
-      SampleTime = (unsigned long)NewSampleTime;
-   }
+	if (NewSampleTime > 0)
+	{
+		double ratio = (double)NewSampleTime
+			/ (double)SampleTime;
+		ki *= ratio;
+		kd /= ratio;
+		SampleTime = (unsigned long)NewSampleTime;
+		alpha_D_IIR = 1;	//Set IIR filters to have no effect (alpha=1)
+		alpha_OUT_IIR = 1;
+
+#ifdef DEBUG
+		Serial.print("Sample time set to: ");
+		Serial.println(SampleTime);
+		Serial.print("New Ki, Kd: ");
+		Serial.print(ki);
+		Serial.print(", ");
+		Serial.println(kd);
+#endif
+	}
+}
+
+/* SetDFilterTime(...) *********************************************************
+ * sets the period, in Milliseconds, for the IIR filter
+ ******************************************************************************/
+void PID::SetDFilterTime(int newIIRFilterTime)
+{
+#ifdef IIR_FILTER_D
+	alpha_D_IIR = (double)SampleTime / newIIRFilterTime;
+	if (alpha_D_IIR > 1) alpha_D_IIR = 1;
+	if (alpha_D_IIR < 0.001) alpha_D_IIR = 0.001;
+#else
+	alpha_D_IIR = 1;
+#endif
+
+#ifdef DEBUG
+	Serial.print("IIR filter D alpha: ");
+	Serial.println(alpha_D_IIR);
+#endif
+}
+
+/* SetOutFilterTime(...) *********************************************************
+ * sets the period, in Milliseconds, for the IIR filter
+ ******************************************************************************/
+void PID::SetOutFilterTime(int newIIRFilterTime)
+{
+#ifdef IIR_FILTER_OUT
+	alpha_OUT_IIR = (double)SampleTime / newIIRFilterTime;
+	if (alpha_OUT_IIR > 1) alpha_OUT_IIR = 1;
+	if (alpha_OUT_IIR < 0) alpha_OUT_IIR = 0;
+#else
+		alpha_OUT_IIR = 1;
+#endif
+
+#ifdef DEBUG
+		Serial.print("IIR filter OUT alpha: ");
+		Serial.println(alpha_OUT_IIR);
+#endif
+}
+
+void PID::toggleDebugPrint()
+{
+	debugPrint = !debugPrint;
 }
 
 /* SetOutputLimits(...)****************************************************
@@ -165,6 +262,13 @@ void PID::SetOutputLimits(double Min, double Max)
 	   if(outputSum > outMax) outputSum= outMax;
 	   else if(outputSum < outMin) outputSum= outMin;
    }
+
+#ifdef DEBUG
+   Serial.print("New output limits");
+   Serial.print(outMin);
+   Serial.print(", ");
+   Serial.println(outMax);
+#endif
 }
 
 /* SetMode(...)****************************************************************
@@ -180,6 +284,11 @@ void PID::SetMode(int Mode)
         PID::Initialize();
     }
     inAuto = newAuto;
+
+#ifdef DEBUG
+	if(newAuto) Serial.println("Mode now to AUTO");
+	else Serial.println("Mode now to MANUAL");
+#endif
 }
 
 /* Initialize()****************************************************************
